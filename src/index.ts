@@ -1,25 +1,4 @@
-// MIDI 解析メモ
 import { parseMidi } from "midi-file";
-(async () => {
-  const midi = parseMidi(
-    new Uint8Array(await (await fetch("./midi/test.mid")).arrayBuffer())
-  );
-  midi.tracks = midi.tracks.map((track) =>
-    track
-      .reduce((p, c) => {
-        if ("channel" in c) {
-          p[c.channel + 1] = [...p[c.channel + 1], c];
-        } else {
-          p[0] = [...p[0], c];
-        }
-        return p;
-      }, new Array(17).fill([]))
-      .filter((x) => x.length)
-  );
-  console.log(midi);
-})();
-
-// ここからシンセ
 
 type VADSR = [number, number, number, number, number];
 
@@ -71,7 +50,15 @@ class Envelope extends GainNode {
     [this.volume, this.attack, this.decay, this.sustain, this.release] = vadsr;
     this.boost = boost;
     this.gain.value = 0;
+    this.stopTime = NaN;
     this.down();
+  }
+  getPhase() {
+    if (this.context.currentTime < this.attackTime) return "A";
+    if (this.context.currentTime < this.decayTime) return "D";
+    if (Number.isNaN(this.stopTime)) return "S";
+    if (this.context.currentTime < this.stopTime) return "R";
+    return "X";
   }
   down() {
     this.attackTime = this.context.currentTime + this.attack;
@@ -104,7 +91,7 @@ class Note {
   boostVolume: number;
   oscType: OscillatorType;
   osc: Osc;
-  amp: Envelope;
+  env: Envelope;
   constructor(
     ctx: AudioContext,
     noteNumber: number,
@@ -120,18 +107,18 @@ class Note {
     this.boostVolume = boostVolume;
     this.oscType = oscType;
     this.osc = new Osc(this.context, this.noteNumber, this.oscType, this.pitch);
-    this.amp = new Envelope(this.context, this.vadsr, this.boostVolume);
-    this.osc.connect(this.amp);
-    this.amp.connect(this.context.destination);
+    this.env = new Envelope(this.context, this.vadsr, this.boostVolume);
+    this.osc.connect(this.env);
+    this.env.connect(this.context.destination);
     this.down();
   }
   down() {
-    this.amp.down();
+    this.env.down();
     this.osc.start();
   }
   up() {
-    this.amp.up();
-    this.osc.stop(this.amp.stopTime);
+    this.env.up();
+    this.osc.stop(this.env.stopTime);
   }
 }
 
@@ -144,19 +131,23 @@ class Channel {
   boostVolume: number;
   oscType: OscillatorType;
   currentNotes: { [key: number]: Note };
+  polyphony: number;
   constructor(
     ctx: AudioContext,
     vadsr: VADSR,
+    polyphony = 16,
     boostVolume = 1,
     oscType = "sine" as OscillatorType
   ) {
     this.context = ctx;
     this.vadsr = vadsr;
+    this.polyphony = polyphony;
     this.boostVolume = boostVolume;
     this.oscType = oscType;
     this.currentNotes = {};
   }
   startNote(noteNumber: number, pitch: number) {
+    if (Object.keys(this.currentNotes).length >= this.polyphony) return;
     this.currentNotes[noteNumber] = new Note(
       this.context,
       noteNumber,
@@ -171,11 +162,16 @@ class Channel {
     );
   }
   stopNote(noteNumber: number) {
-    this.currentNotes[noteNumber].up();
+    if (this.currentNotes[noteNumber]) this.currentNotes[noteNumber].up();
   }
   cleanNote(noteNumber: number) {
-    console.log("clear:", noteNumber);
-    delete this.currentNotes[noteNumber];
+    console.log(
+      this.currentNotes[noteNumber].env.getPhase() === "X" ? "clear:" : "keep:",
+      noteNumber,
+      Object.keys(this.currentNotes).length
+    );
+    if (this.currentNotes[noteNumber].env.getPhase() === "X")
+      delete this.currentNotes[noteNumber];
   }
 }
 
@@ -188,7 +184,14 @@ let noteNumber = 69;
 //   );
 // }, 10);
 
-(window as any).ch = new Channel(ctx, [0.5, 0.1, 0.1, 0.5, 1], 1, "sawtooth");
+(window as any).ch = new Channel(
+  ctx,
+  [0.5, 0, 0.1, 0.5, 0.5],
+  16,
+  1,
+  "triangle"
+);
+// (window as any).ch = new Channel(ctx, [0.5, 0, 0.1, 0.5, 0], 3, 1, "sawtooth");
 
 (window as any).down = () => {
   (window as any).ch.startNote(noteNumber, 0);
@@ -196,10 +199,41 @@ let noteNumber = 69;
 (window as any).up = () => {
   (window as any).ch.stopNote(noteNumber);
 };
-
-// (window as any).play = () => {
-//   playNote(noteNumber, [0.5, 0.1, 0.1, 0.5, 1]);
-// };
 (window as any).sub = () => {
   noteNumber--;
 };
+
+(async () => {
+  const filebuf = new Uint8Array(
+    await (await fetch("./midi/reap2.mid")).arrayBuffer()
+  );
+
+  const midi = parseMidi(filebuf);
+  midi.tracks = midi.tracks.map((track) =>
+    track
+      .reduce((p, c) => {
+        if ("channel" in c) {
+          p[c.channel + 1] = [...p[c.channel + 1], c];
+        } else {
+          p[0] = [...p[0], c];
+        }
+        return p;
+      }, new Array(17).fill([]))
+      .filter((x) => x.length)
+  );
+  console.log(midi);
+
+  (window as any).play = () => {
+    (async () => {
+      for await (let t of (midi as any).tracks[0][1].map((x) => () =>
+        new Promise((r) => setTimeout(() => r(x), x.deltaTime * 0.75))
+      )) {
+        const res = await t();
+        console.log(res);
+        if (res.type === "noteOn")
+          (window as any).ch.startNote(res.noteNumber, 0);
+        if (res.type === "noteOff") (window as any).ch.stopNote(res.noteNumber);
+      }
+    })();
+  };
+})();
