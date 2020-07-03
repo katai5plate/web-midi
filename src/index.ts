@@ -303,16 +303,21 @@ class Player {
       track: midi.tracks[0] as any,
       channels: [
         new Channel(ctx, {
-          vadsr: [0.5, 0.25, 0.1, 0.5, 0.5],
-          oscType: "triangle",
+          vadsr: [0.5, 0.1, 0, 1, 0],
+          polyphony: 2,
+          oscType: "sine",
         }),
         new Channel(ctx, {
-          vadsr: [0.5, 0, 0.1, 0.5, 0.5],
+          vadsr: [0.5, 0, 0, 0.5, 0],
+          polyphony: 2,
           oscType: "sawtooth",
+          panpot: 0.5,
         }),
         new Channel(ctx, {
           vadsr: [0.5, 0, 0.1, 0.5, 0.5],
+          polyphony: 3,
           oscType: "square",
+          panpot: -0.5,
         }),
       ],
     });
