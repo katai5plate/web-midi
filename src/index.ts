@@ -1,4 +1,5 @@
 import { parseMidi } from "midi-file";
+import { time } from "console";
 
 type VADSR = [number, number, number, number, number];
 
@@ -80,6 +81,13 @@ class Envelope extends GainNode {
   }
 }
 
+class Pan extends StereoPannerNode {
+  constructor(ctx: AudioContext, pan: number) {
+    super(ctx);
+    this.pan.value = pan;
+  }
+}
+
 /**
  * 音符
  */
@@ -88,15 +96,18 @@ class Note {
   noteNumber: number;
   pitch: number;
   vadsr: VADSR;
+  panpot: number;
   boostVolume: number;
   oscType: OscillatorType;
   osc: Osc;
   env: Envelope;
+  pan: Pan;
   constructor(
     ctx: AudioContext,
     noteNumber: number,
     pitch: number,
     vadsr: VADSR,
+    panpot: number,
     boostVolume = 1,
     oscType = "sine" as OscillatorType
   ) {
@@ -104,12 +115,15 @@ class Note {
     this.noteNumber = noteNumber;
     this.pitch = pitch;
     this.vadsr = vadsr;
+    this.panpot = panpot;
     this.boostVolume = boostVolume;
     this.oscType = oscType;
     this.osc = new Osc(this.context, this.noteNumber, this.oscType, this.pitch);
     this.env = new Envelope(this.context, this.vadsr, this.boostVolume);
+    this.pan = new Pan(this.context, this.panpot);
     this.osc.connect(this.env);
-    this.env.connect(this.context.destination);
+    this.env.connect(this.pan);
+    this.pan.connect(this.context.destination);
     this.down();
   }
   down() {
@@ -128,6 +142,7 @@ class Note {
 class Channel {
   context: AudioContext;
   vadsr: VADSR;
+  panpot: number;
   boostVolume: number;
   oscType: OscillatorType;
   currentNotes: { [key: number]: Note };
@@ -135,12 +150,14 @@ class Channel {
   constructor(
     ctx: AudioContext,
     vadsr: VADSR,
+    panpot: number,
     polyphony = 16,
     boostVolume = 1,
     oscType = "sine" as OscillatorType
   ) {
     this.context = ctx;
     this.vadsr = vadsr;
+    this.panpot = panpot;
     this.polyphony = polyphony;
     this.boostVolume = boostVolume;
     this.oscType = oscType;
@@ -153,6 +170,7 @@ class Channel {
       noteNumber,
       pitch,
       this.vadsr,
+      this.panpot,
       this.boostVolume,
       this.oscType
     );
@@ -187,11 +205,12 @@ let noteNumber = 69;
 (window as any).ch = new Channel(
   ctx,
   [0.5, 0, 0.1, 0.5, 0.5],
+  0,
   16,
   1,
   "triangle"
 );
-// (window as any).ch = new Channel(ctx, [0.5, 0, 0.1, 0.5, 0], 3, 1, "sawtooth");
+// (window as any).ch = new Channel(ctx, [0.5, 0, 0.1, 0.5, 0], 0, 3, 1, "sawtooth");
 
 (window as any).down = () => {
   (window as any).ch.startNote(noteNumber, 0);
