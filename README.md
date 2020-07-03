@@ -15,6 +15,7 @@ yarn dev
   - イベントはチャンネルごとに順次発火する。
 - noteNumber を周波数に変換するには: `440 * 2 ** ((noteNumber - 69) / 12)`
 - FM 音源の作り方: https://m0t0k1w.tumblr.com/post/121737581743/web-audio-api%E3%81%A7fm%E3%82%B7%E3%83%B3%E3%82%BB%E3%82%92%E6%9B%B8%E3%81%8F
+- ラグがあって BPM が若干遅れる？setTimeout を使うから遅れる説あり
 
 ## 決めごと
 

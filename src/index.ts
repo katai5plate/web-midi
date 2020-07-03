@@ -256,24 +256,37 @@ class Player {
   channels: Channel[];
   track: MIDITrackEvent[];
   interpreters: (() => Promise<MIDITrackEvent>)[];
+  ticksPerBeat: number;
+  bpm: number;
   constructor(
     context: AudioContext,
-    params: { track: MIDITrackEvent[]; channels: Channel[] }
+    params: {
+      track: MIDITrackEvent[];
+      channels: Channel[];
+      ticksPerBeat: number;
+      bpm: number;
+    }
   ) {
     this.context = context;
     this.track = params.track;
     this.channels = params.channels;
+    this.ticksPerBeat = params.ticksPerBeat;
+    this.bpm = params.bpm;
     this.generateInterpreters();
     this.readInterpreters();
   }
   generateInterpreters() {
     this.interpreters = this.track.map((event) => () =>
       new Promise<MIDITrackEvent>((r) =>
-        setTimeout(() => r(event), event.deltaTime)
+        setTimeout(
+          () => r(event),
+          (event.deltaTime / this.ticksPerBeat) * (60000 / this.bpm)
+        )
       )
     );
   }
   async readInterpreters() {
+    console.time("midi");
     Promise.all(
       this.channels.map(async (ch, ci) => {
         for await (let elm of this.interpreters.slice(1)) {
@@ -286,7 +299,7 @@ class Player {
           }
         }
       })
-    );
+    ).then(() => console.timeEnd("midi"));
   }
 }
 
@@ -300,7 +313,9 @@ class Player {
 
   (window as any).play = () => {
     new Player(ctx, {
-      track: midi.tracks[0] as any,
+      track: midi.tracks[0],
+      ticksPerBeat: midi.header.ticksPerBeat,
+      bpm: 120,
       channels: [
         new Channel(ctx, {
           vadsr: [0.5, 0.1, 0, 1, 0],
