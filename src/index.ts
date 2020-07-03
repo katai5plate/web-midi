@@ -98,10 +98,13 @@ class Pan extends StereoPannerNode {
   }
 }
 
+// Note の種類が増えたら適宜追加
+type Note = SimpleNote;
+
 /**
- * 音符
+ * 通常の音符
  */
-class Note {
+class SimpleNote {
   context: AudioContext;
   noteNumber: number;
   pitch: number;
@@ -130,7 +133,10 @@ class Note {
     this.panpot = params.panpot;
     this.boostVolume = params.boostVolume;
     this.oscType = params.oscType;
-
+    this.connection();
+    this.down();
+  }
+  connection() {
     this.osc = new Osc(this.context, {
       noteNumber: this.noteNumber,
       type: this.oscType,
@@ -145,7 +151,6 @@ class Note {
     this.osc.connect(this.env);
     this.env.connect(this.pan);
     this.pan.connect(this.context.destination);
-    this.down();
   }
   down() {
     this.env.down();
@@ -157,6 +162,8 @@ class Note {
   }
 }
 
+type NoteMode = "normal" | "fm" | "psg" | "pcm";
+
 /**
  * チャンネルの音符の状態管理
  */
@@ -166,6 +173,8 @@ class Channel {
   panpot: number;
   boostVolume: number;
   oscType: OscillatorType;
+  noteMode: NoteMode;
+  noteArgs: any[];
   polyState: { [key: number]: Note };
   polyphony: number;
   constructor(
@@ -176,6 +185,8 @@ class Channel {
       polyphony?: number;
       boostVolume?: number;
       oscType?: OscillatorType;
+      noteMode?: NoteMode;
+      noteArgs?: any[];
     }
   ) {
     this.context = context;
@@ -184,18 +195,30 @@ class Channel {
     this.polyphony = params.polyphony || 16;
     this.boostVolume = params.boostVolume || 1;
     this.oscType = params.oscType || "sine";
+    this.noteMode = params.noteMode || "normal";
+    this.noteArgs = params.noteArgs || [];
     this.polyState = {};
   }
   startNote(noteNumber: number, pitch: number) {
     if (Object.keys(this.polyState).length >= this.polyphony) return;
-    this.polyState[noteNumber] = new Note(this.context, {
-      noteNumber,
-      pitch,
-      vadsr: this.vadsr,
-      panpot: this.panpot,
-      boostVolume: this.boostVolume,
-      oscType: this.oscType,
-    });
+    switch (this.noteMode) {
+      case "normal":
+        this.polyState[noteNumber] = new SimpleNote(this.context, {
+          noteNumber,
+          pitch,
+          vadsr: this.vadsr,
+          panpot: this.panpot,
+          boostVolume: this.boostVolume,
+          oscType: this.oscType,
+        });
+        break;
+      case "fm":
+      case "psg":
+      case "pcm":
+        throw "Unimplemented NoteMode";
+      default:
+        throw "Invalid NoteMode";
+    }
     this.polyState[noteNumber].osc.onended = this.cleanNote.bind(
       this,
       noteNumber
