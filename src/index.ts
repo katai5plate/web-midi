@@ -1,5 +1,4 @@
 import { parseMidi } from "midi-file";
-import { time } from "console";
 
 type VADSR = [number, number, number, number, number];
 
@@ -12,15 +11,17 @@ class Osc extends OscillatorNode {
   noteNumber: number;
   pitch: number;
   constructor(
-    ctx: AudioContext,
-    noteNumber: number,
-    type: OscillatorType,
-    pitch: number
+    context: AudioContext,
+    params: {
+      noteNumber: number;
+      type: OscillatorType;
+      pitch: number;
+    }
   ) {
-    super(ctx);
-    this.type = type;
-    this.noteNumber = noteNumber;
-    this.pitch = pitch;
+    super(context);
+    this.noteNumber = params.noteNumber;
+    this.type = params.type;
+    this.pitch = params.pitch;
     this.setFrequency();
   }
   setFrequency() {
@@ -46,20 +47,29 @@ class Envelope extends GainNode {
   attackTime: number;
   decayTime: number;
   stopTime: number;
-  constructor(ctx: AudioContext, vadsr: number[], boost = 1) {
-    super(ctx);
-    [this.volume, this.attack, this.decay, this.sustain, this.release] = vadsr;
-    this.boost = boost;
+  constructor(
+    context: AudioContext,
+    params: { vadsr: number[]; boost: number }
+  ) {
+    super(context);
+    [
+      this.volume,
+      this.attack,
+      this.decay,
+      this.sustain,
+      this.release,
+    ] = params.vadsr;
+    this.boost = params.boost;
     this.gain.value = 0;
     this.stopTime = NaN;
     this.down();
   }
   getPhase() {
-    if (this.context.currentTime < this.attackTime) return "A";
-    if (this.context.currentTime < this.decayTime) return "D";
-    if (Number.isNaN(this.stopTime)) return "S";
-    if (this.context.currentTime < this.stopTime) return "R";
-    return "X";
+    if (this.context.currentTime < this.attackTime) return 0;
+    if (this.context.currentTime < this.decayTime) return 1;
+    if (Number.isNaN(this.stopTime)) return 2;
+    if (this.context.currentTime < this.stopTime) return 3;
+    return -1;
   }
   down() {
     this.attackTime = this.context.currentTime + this.attack;
@@ -82,9 +92,9 @@ class Envelope extends GainNode {
 }
 
 class Pan extends StereoPannerNode {
-  constructor(ctx: AudioContext, pan: number) {
-    super(ctx);
-    this.pan.value = pan;
+  constructor(context: AudioContext, panpot: number) {
+    super(context);
+    this.pan.value = panpot;
   }
 }
 
@@ -103,24 +113,35 @@ class Note {
   env: Envelope;
   pan: Pan;
   constructor(
-    ctx: AudioContext,
-    noteNumber: number,
-    pitch: number,
-    vadsr: VADSR,
-    panpot: number,
-    boostVolume = 1,
-    oscType = "sine" as OscillatorType
+    context: AudioContext,
+    params: {
+      noteNumber: number;
+      pitch: number;
+      vadsr: VADSR;
+      panpot: number;
+      boostVolume: number;
+      oscType: OscillatorType;
+    }
   ) {
-    this.context = ctx;
-    this.noteNumber = noteNumber;
-    this.pitch = pitch;
-    this.vadsr = vadsr;
-    this.panpot = panpot;
-    this.boostVolume = boostVolume;
-    this.oscType = oscType;
-    this.osc = new Osc(this.context, this.noteNumber, this.oscType, this.pitch);
-    this.env = new Envelope(this.context, this.vadsr, this.boostVolume);
+    this.context = context;
+    this.noteNumber = params.noteNumber;
+    this.pitch = params.pitch;
+    this.vadsr = params.vadsr;
+    this.panpot = params.panpot;
+    this.boostVolume = params.boostVolume;
+    this.oscType = params.oscType;
+
+    this.osc = new Osc(this.context, {
+      noteNumber: this.noteNumber,
+      type: this.oscType,
+      pitch: this.pitch,
+    });
+    this.env = new Envelope(this.context, {
+      vadsr: this.vadsr,
+      boost: this.boostVolume,
+    });
     this.pan = new Pan(this.context, this.panpot);
+
     this.osc.connect(this.env);
     this.env.connect(this.pan);
     this.pan.connect(this.context.destination);
@@ -145,51 +166,52 @@ class Channel {
   panpot: number;
   boostVolume: number;
   oscType: OscillatorType;
-  currentNotes: { [key: number]: Note };
+  polyState: { [key: number]: Note };
   polyphony: number;
   constructor(
-    ctx: AudioContext,
-    vadsr: VADSR,
-    panpot: number,
-    polyphony = 16,
-    boostVolume = 1,
-    oscType = "sine" as OscillatorType
+    context: AudioContext,
+    params: {
+      vadsr: VADSR;
+      panpot?: number;
+      polyphony?: number;
+      boostVolume?: number;
+      oscType?: OscillatorType;
+    }
   ) {
-    this.context = ctx;
-    this.vadsr = vadsr;
-    this.panpot = panpot;
-    this.polyphony = polyphony;
-    this.boostVolume = boostVolume;
-    this.oscType = oscType;
-    this.currentNotes = {};
+    this.context = context;
+    this.vadsr = params.vadsr;
+    this.panpot = params.panpot || 0;
+    this.polyphony = params.polyphony || 16;
+    this.boostVolume = params.boostVolume || 1;
+    this.oscType = params.oscType || "sine";
+    this.polyState = {};
   }
   startNote(noteNumber: number, pitch: number) {
-    if (Object.keys(this.currentNotes).length >= this.polyphony) return;
-    this.currentNotes[noteNumber] = new Note(
-      this.context,
+    if (Object.keys(this.polyState).length >= this.polyphony) return;
+    this.polyState[noteNumber] = new Note(this.context, {
       noteNumber,
       pitch,
-      this.vadsr,
-      this.panpot,
-      this.boostVolume,
-      this.oscType
-    );
-    this.currentNotes[noteNumber].osc.onended = this.cleanNote.bind(
+      vadsr: this.vadsr,
+      panpot: this.panpot,
+      boostVolume: this.boostVolume,
+      oscType: this.oscType,
+    });
+    this.polyState[noteNumber].osc.onended = this.cleanNote.bind(
       this,
       noteNumber
     );
   }
   stopNote(noteNumber: number) {
-    if (this.currentNotes[noteNumber]) this.currentNotes[noteNumber].up();
+    if (this.polyState[noteNumber]) this.polyState[noteNumber].up();
   }
   cleanNote(noteNumber: number) {
     console.log(
-      this.currentNotes[noteNumber].env.getPhase() === "X" ? "clear:" : "keep:",
+      this.polyState[noteNumber].env.getPhase() === -1 ? "clear:" : "keep:",
       noteNumber,
-      Object.keys(this.currentNotes).length
+      Object.keys(this.polyState).length
     );
-    if (this.currentNotes[noteNumber].env.getPhase() === "X")
-      delete this.currentNotes[noteNumber];
+    if (this.polyState[noteNumber].env.getPhase() === -1)
+      delete this.polyState[noteNumber];
   }
 }
 
@@ -202,14 +224,10 @@ let noteNumber = 69;
 //   );
 // }, 10);
 
-(window as any).ch = new Channel(
-  ctx,
-  [0.5, 0, 0.1, 0.5, 0.5],
-  0,
-  16,
-  1,
-  "triangle"
-);
+(window as any).ch = new Channel(ctx, {
+  vadsr: [0.5, 0, 0.1, 0.5, 0.5],
+  oscType: "triangle",
+});
 // (window as any).ch = new Channel(ctx, [0.5, 0, 0.1, 0.5, 0], 0, 3, 1, "sawtooth");
 
 (window as any).down = () => {
