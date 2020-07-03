@@ -1,4 +1,4 @@
-import { parseMidi } from "midi-file";
+import { parseMidi, MIDIFile, MIDITrackEvent } from "midi-file";
 
 type VADSR = [number, number, number, number, number];
 
@@ -96,6 +96,9 @@ class Pan extends StereoPannerNode {
     super(context);
     this.pan.value = panpot;
   }
+  setPanpot(panpot: number) {
+    this.pan.value = panpot;
+  }
 }
 
 // Note の種類が増えたら適宜追加
@@ -115,6 +118,7 @@ class SimpleNote {
   osc: Osc;
   env: Envelope;
   pan: Pan;
+  out: GainNode;
   constructor(
     context: AudioContext,
     params: {
@@ -133,6 +137,7 @@ class SimpleNote {
     this.panpot = params.panpot;
     this.boostVolume = params.boostVolume;
     this.oscType = params.oscType;
+    this.out = new GainNode(this.context);
     this.connection();
     this.down();
   }
@@ -148,9 +153,7 @@ class SimpleNote {
     });
     this.pan = new Pan(this.context, this.panpot);
 
-    this.osc.connect(this.env);
-    this.env.connect(this.pan);
-    this.pan.connect(this.context.destination);
+    this.osc.connect(this.env).connect(this.pan).connect(this.out);
   }
   down() {
     this.env.down();
@@ -177,6 +180,7 @@ class Channel {
   noteArgs: any[];
   polyState: { [key: number]: Note };
   polyphony: number;
+  globalSend: GainNode;
   constructor(
     context: AudioContext,
     params: {
@@ -198,6 +202,8 @@ class Channel {
     this.noteMode = params.noteMode || "normal";
     this.noteArgs = params.noteArgs || [];
     this.polyState = {};
+    this.globalSend = new GainNode(this.context);
+    this.globalSend.connect(this.context.destination);
   }
   startNote(noteNumber: number, pitch: number) {
     if (Object.keys(this.polyState).length >= this.polyphony) return;
@@ -219,10 +225,17 @@ class Channel {
       default:
         throw "Invalid NoteMode";
     }
+    this.polyState[noteNumber].out.connect(this.globalSend);
     this.polyState[noteNumber].osc.onended = this.cleanNote.bind(
       this,
       noteNumber
     );
+  }
+  getAllNote() {
+    return Object.values(this.polyState);
+  }
+  setPitch(pitch: number) {
+    return this.getAllNote().forEach((x) => x.osc.setPitch(pitch / 8192));
   }
   stopNote(noteNumber: number) {
     if (this.polyState[noteNumber]) this.polyState[noteNumber].up();
@@ -238,62 +251,70 @@ class Channel {
   }
 }
 
-let noteNumber = 69;
-
-// let n: Note;
-// setInterval(() => {
-//   document.querySelector("#memo").innerHTML = "|".repeat(
-//     n ? n.amp.gain.value * 50 : 0
-//   );
-// }, 10);
-
-(window as any).ch = new Channel(ctx, {
-  vadsr: [0.5, 0, 0.1, 0.5, 0.5],
-  oscType: "triangle",
-});
-// (window as any).ch = new Channel(ctx, [0.5, 0, 0.1, 0.5, 0], 0, 3, 1, "sawtooth");
-
-(window as any).down = () => {
-  (window as any).ch.startNote(noteNumber, 0);
-};
-(window as any).up = () => {
-  (window as any).ch.stopNote(noteNumber);
-};
-(window as any).sub = () => {
-  noteNumber--;
-};
+class Player {
+  context: AudioContext;
+  channels: Channel[];
+  track: MIDITrackEvent[];
+  interpreters: (() => Promise<MIDITrackEvent>)[];
+  constructor(
+    context: AudioContext,
+    params: { track: MIDITrackEvent[]; channels: Channel[] }
+  ) {
+    this.context = context;
+    this.track = params.track;
+    this.channels = params.channels;
+    this.generateInterpreters();
+    this.readInterpreters();
+  }
+  generateInterpreters() {
+    this.interpreters = this.track.map((event) => () =>
+      new Promise<MIDITrackEvent>((r) =>
+        setTimeout(() => r(event), event.deltaTime)
+      )
+    );
+  }
+  async readInterpreters() {
+    Promise.all(
+      this.channels.map(async (ch, ci) => {
+        for await (let elm of this.interpreters.slice(1)) {
+          const event = await elm();
+          console.log(event);
+          if (event.channel === ci) {
+            if (event.type === "noteOn") ch.startNote(event.noteNumber, 0);
+            if (event.type === "noteOff") ch.stopNote(event.noteNumber);
+            if (event.type === "pitchBend") ch.setPitch(event.value);
+          }
+        }
+      })
+    );
+  }
+}
 
 (async () => {
   const filebuf = new Uint8Array(
-    await (await fetch("./midi/reap2.mid")).arrayBuffer()
+    await (await fetch("./midi/multi.mid")).arrayBuffer()
   );
 
   const midi = parseMidi(filebuf);
-  midi.tracks = midi.tracks.map((track) =>
-    track
-      .reduce((p, c) => {
-        if ("channel" in c) {
-          p[c.channel + 1] = [...p[c.channel + 1], c];
-        } else {
-          p[0] = [...p[0], c];
-        }
-        return p;
-      }, new Array(17).fill([]))
-      .filter((x) => x.length)
-  );
   console.log(midi);
 
   (window as any).play = () => {
-    (async () => {
-      for await (let t of (midi as any).tracks[0][1].map((x) => () =>
-        new Promise((r) => setTimeout(() => r(x), x.deltaTime * 0.75))
-      )) {
-        const res = await t();
-        console.log(res);
-        if (res.type === "noteOn")
-          (window as any).ch.startNote(res.noteNumber, 0);
-        if (res.type === "noteOff") (window as any).ch.stopNote(res.noteNumber);
-      }
-    })();
+    new Player(ctx, {
+      track: midi.tracks[0] as any,
+      channels: [
+        new Channel(ctx, {
+          vadsr: [0.5, 0.25, 0.1, 0.5, 0.5],
+          oscType: "triangle",
+        }),
+        new Channel(ctx, {
+          vadsr: [0.5, 0, 0.1, 0.5, 0.5],
+          oscType: "sawtooth",
+        }),
+        new Channel(ctx, {
+          vadsr: [0.5, 0, 0.1, 0.5, 0.5],
+          oscType: "square",
+        }),
+      ],
+    });
   };
 })();
